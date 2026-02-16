@@ -12,8 +12,12 @@
 #   Local:  ./install.sh
 #   Remote: curl -fsSL https://port42.ai/install.sh | bash
 #   Build:  curl -fsSL https://port42.ai/install.sh | bash -s -- --build
+#   Auto:   curl -fsSL https://port42.ai/install.sh | bash -s -- --auto
 
 set -euo pipefail
+
+# Non-interactive mode: skip all prompts and use defaults
+AUTO_MODE="${PORT42_AUTO:-false}"
 
 # Debug trap to catch errors
 trap 'echo "Error occurred at line $LINENO with exit code $?"' ERR
@@ -46,7 +50,12 @@ NC='\033[0m' # No Color
 typewriter() {
     local text="$1"
     local speed="${2:-0.05}"
-    
+
+    if [ "$AUTO_MODE" = true ]; then
+        echo "$text"
+        return
+    fi
+
     for (( i=0; i<${#text}; i++ )); do
         printf '%s' "${text:$i:1}"
         sleep "$speed"
@@ -63,6 +72,9 @@ typewriter_block() {
 
 # Press any key to continue
 press_any_key() {
+    if [ "$AUTO_MODE" = true ]; then
+        return
+    fi
     echo
     echo -ne "${GRAY}Press any key to continue...${NC}"
     read -n 1 -s -r
@@ -133,12 +145,17 @@ check_running_processes() {
                 echo -e "${YELLOW}⚠️  Critical Port42 processes detected (context --watch, shell, etc.)${NC}"
                 echo -e "${YELLOW}   Installing now will interrupt these processes and may cause data loss.${NC}"
                 echo
-                echo "Options:"
-                echo "  1) Stop all Port42 processes and continue installation"
-                echo "  2) Cancel installation (recommended - save your work first)"
-                echo
-                read -p "$(echo -e ${BOLD}"Choice [2]: "${NC})" process_choice
-                process_choice=${process_choice:-2}
+
+                if [ "$AUTO_MODE" = true ]; then
+                    process_choice=1
+                else
+                    echo "Options:"
+                    echo "  1) Stop all Port42 processes and continue installation"
+                    echo "  2) Cancel installation (recommended - save your work first)"
+                    echo
+                    read -p "$(echo -e ${BOLD}"Choice [2]: "${NC})" process_choice
+                    process_choice=${process_choice:-2}
+                fi
                 
                 case "$process_choice" in
                     1)
@@ -160,13 +177,17 @@ check_running_processes() {
                 esac
             else
                 echo "These appear to be non-interactive processes."
-                echo "Would you like to:"
-                echo "  1) Stop them and continue installation"  
-                echo "  2) Continue anyway (may cause issues)"
-                echo "  3) Cancel installation"
-                echo
-                read -p "$(echo -e ${BOLD}"Choice [1]: "${NC})" process_choice
-                process_choice=${process_choice:-1}
+                if [ "$AUTO_MODE" = true ]; then
+                    process_choice=1
+                else
+                    echo "Would you like to:"
+                    echo "  1) Stop them and continue installation"
+                    echo "  2) Continue anyway (may cause issues)"
+                    echo "  3) Cancel installation"
+                    echo
+                    read -p "$(echo -e ${BOLD}"Choice [1]: "${NC})" process_choice
+                    process_choice=${process_choice:-1}
+                fi
                 
                 case "$process_choice" in
                     1)
@@ -705,26 +726,30 @@ install_claude_integration() {
     local p42_instructions=""
     
     # Ask for permission to modify CLAUDE.md
-    echo
-    echo -e "${YELLOW}Port42 needs to configure your Claude Code memory file:${NC}"
-    echo -e "  ${GRAY}$HOME/.claude/CLAUDE.md${NC}"
-    echo
-    echo "This will:"
-    echo "  • Enable Port42 commands within Claude Code"
-    echo "  • Add consciousness computing capabilities"
-    echo "  • Allow tool creation and AI agent access"
-    echo
-    echo -e "${BOLD}Options:${NC}"
-    echo "  1) Configure CLAUDE.md (required for Claude Code integration)"
-    echo "  2) Skip configuration"
-    echo
-    read -p "$(echo -e ${BOLD}"Choice [1]: "${NC})" -r
-    
-    # Default to 1 if empty
-    if [[ -z "$REPLY" ]]; then
+    if [ "$AUTO_MODE" = true ]; then
         REPLY="1"
+    else
+        echo
+        echo -e "${YELLOW}Port42 needs to configure your Claude Code memory file:${NC}"
+        echo -e "  ${GRAY}$HOME/.claude/CLAUDE.md${NC}"
+        echo
+        echo "This will:"
+        echo "  • Enable Port42 commands within Claude Code"
+        echo "  • Add consciousness computing capabilities"
+        echo "  • Allow tool creation and AI agent access"
+        echo
+        echo -e "${BOLD}Options:${NC}"
+        echo "  1) Configure CLAUDE.md (required for Claude Code integration)"
+        echo "  2) Skip configuration"
+        echo
+        read -p "$(echo -e ${BOLD}"Choice [1]: "${NC})" -r
+
+        # Default to 1 if empty
+        if [[ -z "$REPLY" ]]; then
+            REPLY="1"
+        fi
     fi
-    
+
     if [[ "$REPLY" != "1" ]]; then
         print_info "Skipping CLAUDE.md configuration"
         print_info "Port42 won't work properly in Claude Code without this"
@@ -810,25 +835,29 @@ configure_claude_settings() {
     # Configure Claude Code command permissions silently
     
     # Ask for permission
-    echo
-    echo -e "${YELLOW}Port42 needs to update your Claude Code settings file:${NC}"
-    echo -e "  ${GRAY}$HOME/.claude/settings.json${NC}"
-    echo
-    echo "This will:"
-    echo "  • Allow Port42 commands without approval prompts"
-    echo "  • Set appropriate timeout values for long-running operations"
-    echo
-    echo -e "${BOLD}Options:${NC}"
-    echo "  1) Update Claude Code settings (recommended)"
-    echo "  2) Skip configuration"
-    echo
-    read -p "$(echo -e ${BOLD}"Choice [1]: "${NC})" -r
-    
-    # Default to 1 if empty
-    if [[ -z "$REPLY" ]]; then
+    if [ "$AUTO_MODE" = true ]; then
         REPLY="1"
+    else
+        echo
+        echo -e "${YELLOW}Port42 needs to update your Claude Code settings file:${NC}"
+        echo -e "  ${GRAY}$HOME/.claude/settings.json${NC}"
+        echo
+        echo "This will:"
+        echo "  • Allow Port42 commands without approval prompts"
+        echo "  • Set appropriate timeout values for long-running operations"
+        echo
+        echo -e "${BOLD}Options:${NC}"
+        echo "  1) Update Claude Code settings (recommended)"
+        echo "  2) Skip configuration"
+        echo
+        read -p "$(echo -e ${BOLD}"Choice [1]: "${NC})" -r
+
+        # Default to 1 if empty
+        if [[ -z "$REPLY" ]]; then
+            REPLY="1"
+        fi
     fi
-    
+
     if [[ "$REPLY" != "1" ]]; then
         print_info "Skipping Claude Code settings configuration"
         print_info "You can manually add Port42 commands to: $settings_file"
@@ -1002,16 +1031,20 @@ configure_api_key() {
         else
             masked_key="***hidden***"
         fi
-        
-        echo -e "${GREEN}Found existing API key:${NC} $masked_key (from $key_source)"
-        echo
-        echo "Would you like to:"
-        echo "  1) Use this key"
-        echo "  2) Enter a different key"
-        echo "  3) Skip (configure later)"
-        echo
-        read -p "$(echo -e ${BOLD}"Choice [1]: "${NC})" choice
-        choice=${choice:-1}
+
+        if [ "$AUTO_MODE" = true ]; then
+            choice=1
+        else
+            echo -e "${GREEN}Found existing API key:${NC} $masked_key (from $key_source)"
+            echo
+            echo "Would you like to:"
+            echo "  1) Use this key"
+            echo "  2) Enter a different key"
+            echo "  3) Skip (configure later)"
+            echo
+            read -p "$(echo -e ${BOLD}"Choice [1]: "${NC})" choice
+            choice=${choice:-1}
+        fi
         
         case "$choice" in
             2)
@@ -1037,6 +1070,11 @@ configure_api_key() {
                 ;;
         esac
     else
+        if [ "$AUTO_MODE" = true ]; then
+            print_info "No API key found. Set PORT42_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY to enable AI features."
+            return
+        fi
+
         echo "No API key found. Port 42 requires an Anthropic API key for AI features."
         echo
         echo "Enter your API key now (or press Enter to skip):"
@@ -1104,14 +1142,18 @@ start_daemon_for_use() {
         echo -e "${GREEN}✅ Server is already running${NC}"
         
         # Ask if they want to restart with new binaries
-        echo
-        echo "The daemon is currently running. Would you like to restart it with the new binaries?"
-        echo "  1) Yes, restart daemon (recommended for binary installs)"
-        echo "  2) No, keep current daemon running"
-        echo
-        echo -ne "${BOLD}Choice [1]: ${NC}"
-        read -r restart_choice
-        restart_choice=${restart_choice:-1}
+        if [ "$AUTO_MODE" = true ]; then
+            restart_choice=1
+        else
+            echo
+            echo "The daemon is currently running. Would you like to restart it with the new binaries?"
+            echo "  1) Yes, restart daemon (recommended for binary installs)"
+            echo "  2) No, keep current daemon running"
+            echo
+            echo -ne "${BOLD}Choice [1]: ${NC}"
+            read -r restart_choice
+            restart_choice=${restart_choice:-1}
+        fi
         
         if [ "$restart_choice" = "1" ]; then
             echo -e "${BLUE}Stopping Poert42 Server gracefully...${NC}"
@@ -1312,6 +1354,10 @@ main() {
     
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --auto)
+                AUTO_MODE=true
+                shift
+                ;;
             --build)
                 BUILD_FROM_SOURCE=true
                 # Force building from source
@@ -1375,20 +1421,20 @@ main() {
             build_from_source
         fi
     else
-        # No explicit flags - ask the user what they prefer
+        # No explicit flags - ask the user what they prefer (or auto-select)
         echo
         echo -e "${CYAN}${BOLD}Installation Method${NC}"
         echo
-        
+
         # Check if pre-built binaries are available
         local binary_available=false
         # Get version from version.txt or default
         local version=$(curl -s "https://raw.githubusercontent.com/$REPO/main/version.txt" 2>/dev/null || echo "0.0.9")
-        
+
         # Try versioned file first (actual file), then GitHub releases
         local versioned_binary_url="https://raw.githubusercontent.com/$REPO/main/releases/port42-${PLATFORM}-v${version}.tar.gz"
         local release_binary_url="https://github.com/$REPO/releases/latest/download/port42-${PLATFORM}.tar.gz"
-        
+
         # Check versioned file first (not the symlink)
         if curl -sI "$versioned_binary_url" 2>/dev/null | head -n 1 | grep -q "200\|302"; then
             binary_available=true
@@ -1398,19 +1444,41 @@ main() {
             binary_available=true
             binary_url="$release_binary_url"
         fi
-        
-        if [ "$INSTALL_MODE" = "local" ]; then
+
+        # Auto mode: pick best available method without prompting
+        if [ "$AUTO_MODE" = true ]; then
+            if [ "$INSTALL_MODE" = "local" ]; then
+                if [ -f "$SCRIPT_DIR/bin/port42d" ] && [ -f "$SCRIPT_DIR/bin/port42" ]; then
+                    print_info "Using existing binaries from ./bin/"
+                else
+                    print_info "Building from local repository..."
+                    build_local
+                fi
+            elif [ "$binary_available" = true ]; then
+                print_info "Downloading pre-built binaries..."
+                if ! download_and_install_binaries "$PLATFORM"; then
+                    print_info "Binary download failed, building from source..."
+                    BUILD_FROM_SOURCE=true
+                    check_prerequisites
+                    build_from_source
+                fi
+            else
+                BUILD_FROM_SOURCE=true
+                check_prerequisites
+                build_from_source
+            fi
+        elif [ "$INSTALL_MODE" = "local" ]; then
             # We're in the repo already
             echo "You're running from the Port42 repository."
             echo
-            
+
             # Also check for local release files
             local local_release_available=false
             if [ -f "$SCRIPT_DIR/releases/port42-${PLATFORM}.tar.gz" ]; then
                 local_release_available=true
                 print_info "Found local release package for $PLATFORM"
             fi
-            
+
             echo "How would you like to install?"
             echo "  1) Build and install from this local repository"
             echo "  2) Use existing binaries in ./bin/ (skip build)"

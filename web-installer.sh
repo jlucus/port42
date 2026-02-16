@@ -1,99 +1,168 @@
 #!/bin/bash
-# Port42 Web Installer - macOS First
-# This script is served at https://port42.ai/install
+# Port42 Web Installer
+# Served at https://port42.ai/install
+#
+# Usage: curl -fsSL https://port42.ai/install | bash
+#
+# This bootstraps the full install.sh from GitHub.
+# It handles the curl-pipe-to-bash pattern by saving itself to a temp file
+# and re-executing with TTY access for interactive prompts.
+
 set -e
 
-# If we're being piped, save to temp and re-execute
+REPO="gordonmattey/port42"
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
+
+# --- TTY re-execution for curl|bash ---
+# When piped, stdin is the script content, not the terminal.
+# Save to a temp file and re-execute with /dev/tty attached.
 if [ ! -t 0 ] || [ ! -t 1 ]; then
     TEMP_SCRIPT=$(mktemp /tmp/port42-web-installer.XXXXXX)
-    # Read all of stdin (the piped script)
     cat > "$TEMP_SCRIPT"
     chmod +x "$TEMP_SCRIPT"
-    # Re-execute the saved script with terminal access
-    # This allows the script to interact with the user
-    exec </dev/tty >/dev/tty 2>&1 bash "$TEMP_SCRIPT" "$@"
+    if [ -e /dev/tty ]; then
+        exec </dev/tty >/dev/tty 2>&1 bash "$TEMP_SCRIPT" "$@"
+    else
+        # No TTY available (e.g. CI) - run non-interactively
+        exec bash "$TEMP_SCRIPT" --auto "$@"
+    fi
 fi
 
-# Clean up temp file on exit if we're the re-executed version
+# Clean up temp file if we're the re-executed copy
 if [[ "$0" == /tmp/port42-web-installer.* ]]; then
     trap "rm -f '$0'" EXIT
 fi
 
-# Port42 Installer
-echo ""
+# --- Colors ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
 
-# Check if we're on macOS
-if [[ "$OSTYPE" != "darwin"* ]]; then
-    echo "❌ Pre-built binaries currently only available for macOS"
-    echo "🔨 Building from source for your platform..."
-    echo ""
-    echo "Downloading installer..."
-    curl -L https://raw.githubusercontent.com/gordonmattey/port42/main/install.sh | bash -s -- --build
-    exit 0
+# --- Helpers ---
+print_error() { echo -e "${RED}Error: $1${NC}" >&2; }
+print_info()  { echo -e "${BLUE}$1${NC}"; }
+print_ok()    { echo -e "${GREEN}$1${NC}"; }
+print_warn()  { echo -e "${YELLOW}$1${NC}"; }
+
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+# --- Prerequisites ---
+if ! command_exists curl && ! command_exists wget; then
+    print_error "curl or wget is required. Please install one and try again."
+    exit 1
 fi
 
-# Detect Mac architecture
+# --- Parse args ---
+AUTO_MODE=false
+EXTRA_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --auto) AUTO_MODE=true ;;
+        *) EXTRA_ARGS+=("$arg") ;;
+    esac
+done
+
+# --- Detect platform ---
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
-case $ARCH in
-    arm64) 
-        PLATFORM="darwin-aarch64"
-        echo "📱 Detected: macOS Apple Silicon (M1/M2/M3)"
+
+case "$OS" in
+    darwin)
+        case "$ARCH" in
+            arm64)  PLATFORM="darwin-aarch64";  PLATFORM_LABEL="macOS Apple Silicon" ;;
+            x86_64) PLATFORM="darwin-x86_64";   PLATFORM_LABEL="macOS Intel" ;;
+            *)      PLATFORM="darwin-${ARCH}";   PLATFORM_LABEL="macOS ($ARCH)" ;;
+        esac
         ;;
-    x86_64) 
-        PLATFORM="darwin-x86_64"
-        echo "📱 Detected: macOS Intel"
+    linux)
+        case "$ARCH" in
+            x86_64)  PLATFORM="linux-x86_64";   PLATFORM_LABEL="Linux x86_64" ;;
+            aarch64) PLATFORM="linux-aarch64";   PLATFORM_LABEL="Linux ARM64" ;;
+            *)       PLATFORM="linux-${ARCH}";    PLATFORM_LABEL="Linux ($ARCH)" ;;
+        esac
         ;;
-    *) 
-        echo "❌ Unsupported Mac architecture: $ARCH"
-        echo "🔨 Building from source..."
-        curl -L https://raw.githubusercontent.com/gordonmattey/port42/main/install.sh | bash -s -- --build
-        exit 0
+    *)
+        print_error "Unsupported OS: $OS"
+        print_info "Port42 supports macOS and Linux."
+        exit 1
         ;;
 esac
 
-# Check if binaries exist for this platform
-# Get version from version.txt
-VERSION=$(curl -s "https://raw.githubusercontent.com/gordonmattey/port42/main/version.txt" 2>/dev/null || echo "0.0.9")
+# --- Display banner ---
+echo
+echo -e "${CYAN}${BOLD}Port42 Installer${NC}"
+echo -e "Detected: ${BOLD}${PLATFORM_LABEL}${NC}"
+echo
 
-# Try versioned repo file first, then GitHub releases
-VERSIONED_BINARY_URL="https://raw.githubusercontent.com/gordonmattey/port42/main/releases/port42-${PLATFORM}-v${VERSION}.tar.gz"
-RELEASE_BINARY_URL="https://github.com/gordonmattey/port42/releases/latest/download/port42-${PLATFORM}.tar.gz"
+# --- Check for pre-built binaries ---
+VERSION=$(curl -sf "${RAW_BASE}/version.txt" 2>/dev/null || echo "0.1.1")
 
-echo "🔍 Checking for pre-built binaries (v${VERSION})..."
+VERSIONED_URL="${RAW_BASE}/releases/port42-${PLATFORM}-v${VERSION}.tar.gz"
+RELEASE_URL="https://github.com/${REPO}/releases/latest/download/port42-${PLATFORM}.tar.gz"
 
-# Check versioned file first
-if curl -sI "$VERSIONED_BINARY_URL" | head -n 1 | grep -q "200\|302"; then
-    echo "✅ Pre-built binaries available for $PLATFORM (v${VERSION})"
+INSTALL_METHOD="source"
+BINARY_URL=""
+
+print_info "Checking for pre-built binaries (v${VERSION})..."
+
+# Check versioned repo file first, then GitHub releases
+if curl -sfI "$VERSIONED_URL" 2>/dev/null | head -n 1 | grep -q "200\|302"; then
     INSTALL_METHOD="binary"
-    BINARY_URL="$VERSIONED_BINARY_URL"
-# Then check GitHub releases
-elif curl -sI "$RELEASE_BINARY_URL" | head -n 1 | grep -q "200\|302"; then
-    echo "✅ Pre-built binaries available for $PLATFORM"
+    BINARY_URL="$VERSIONED_URL"
+elif curl -sfI "$RELEASE_URL" 2>/dev/null | head -n 1 | grep -q "200\|302"; then
     INSTALL_METHOD="binary"
-    BINARY_URL="$RELEASE_BINARY_URL"
-else
-    echo "⚠️  No pre-built binaries available yet for $PLATFORM"
-    echo "🔨 Will build from source instead..."
-    INSTALL_METHOD="source"
+    BINARY_URL="$RELEASE_URL"
 fi
 
-echo ""
-echo "📥 Downloading Port42 installer..."
-
-# Download the main installer
-curl -fsSL https://raw.githubusercontent.com/gordonmattey/port42/main/install.sh -o /tmp/port42-install.sh
-chmod +x /tmp/port42-install.sh
-
-# Run installer interactively
 if [ "$INSTALL_METHOD" = "binary" ]; then
-    # Pre-built binaries are available
-    echo ""
-    /tmp/port42-install.sh
+    print_ok "Pre-built binaries available for ${PLATFORM} (v${VERSION})"
 else
-    echo "🔨 Building Port42 from source..."
-    echo ""
-    /tmp/port42-install.sh --build
+    print_warn "No pre-built binaries for ${PLATFORM}"
+    # Check if build tools are available before committing to source build
+    if ! command_exists go; then
+        print_error "Go is required to build from source but was not found."
+        print_info "Install Go (1.21+): https://go.dev/dl/"
+        if ! command_exists cargo; then
+            print_info "Install Rust/Cargo: https://rustup.rs/"
+        fi
+        exit 1
+    fi
+    if ! command_exists cargo; then
+        print_error "Rust/Cargo is required to build from source but was not found."
+        print_info "Install Rust: https://rustup.rs/"
+        exit 1
+    fi
+    print_info "Will build from source (Go and Rust detected)"
 fi
 
-# Clean up
-rm -f /tmp/port42-install.sh
+# --- Download and run the full installer ---
+echo
+print_info "Downloading installer..."
+
+INSTALLER_TMP=$(mktemp /tmp/port42-install.XXXXXX)
+trap "rm -f '$INSTALLER_TMP'" EXIT
+
+if command_exists curl; then
+    curl -fsSL "${RAW_BASE}/install.sh" -o "$INSTALLER_TMP"
+elif command_exists wget; then
+    wget -q "${RAW_BASE}/install.sh" -O "$INSTALLER_TMP"
+fi
+
+chmod +x "$INSTALLER_TMP"
+
+# Build the argument list for the full installer
+INSTALLER_ARGS=()
+if [ "$AUTO_MODE" = true ]; then
+    INSTALLER_ARGS+=("--auto")
+fi
+if [ "$INSTALL_METHOD" = "source" ]; then
+    INSTALLER_ARGS+=("--build")
+fi
+INSTALLER_ARGS+=("${EXTRA_ARGS[@]}")
+
+echo
+exec bash "$INSTALLER_TMP" "${INSTALLER_ARGS[@]}"
